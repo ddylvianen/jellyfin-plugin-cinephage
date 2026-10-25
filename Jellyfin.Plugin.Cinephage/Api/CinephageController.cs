@@ -42,7 +42,7 @@ public class CinephageController : ControllerBase
     }
 
     /// <summary>
-    /// Searches movies in Cinephage (TMDB).
+    /// Searches movies and series in Cinephage (TMDB).
     /// </summary>
     /// <param name="query">The search text.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -54,12 +54,12 @@ public class CinephageController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
         {
-            return Ok(Array.Empty<MovieResult>());
+            return Ok(Array.Empty<MediaResult>());
         }
 
         try
         {
-            return Ok(await _client.SearchMoviesAsync(query.Trim(), cancellationToken).ConfigureAwait(false));
+            return Ok(await _client.SearchAsync(query.Trim(), cancellationToken).ConfigureAwait(false));
         }
         catch (Exception ex) when (ex is CinephageException or HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -69,7 +69,29 @@ public class CinephageController : ControllerBase
     }
 
     /// <summary>
-    /// Requests a movie in Cinephage and records which Jellyfin user asked for it.
+    /// Lists the seasons of a series with their request/library state.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id of the series.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The seasons.</returns>
+    [HttpGet("Series/{tmdbId:int}/Seasons")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Seasons([FromRoute] int tmdbId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _client.GetSeasonsAsync(tmdbId, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is CinephageException or HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Cinephage seasons lookup failed for TMDB {TmdbId}", tmdbId);
+            return StatusCode(StatusCodes.Status502BadGateway, new { Message = "Seizoenen ophalen mislukt." });
+        }
+    }
+
+    /// <summary>
+    /// Requests a movie or series seasons in Cinephage and records which Jellyfin user asked for it.
     /// </summary>
     /// <param name="body">The request body.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -77,7 +99,7 @@ public class CinephageController : ControllerBase
     [HttpPost("Request")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> RequestMovie([FromBody] MovieRequestBody body, CancellationToken cancellationToken)
+    public async Task<IActionResult> RequestMedia([FromBody] MediaRequestBody body, CancellationToken cancellationToken)
     {
         var claim = User.Claims.FirstOrDefault(c => c.Type.Equals(UserIdClaim, StringComparison.OrdinalIgnoreCase))?.Value;
         if (!Guid.TryParse(claim, out var userId))
@@ -85,16 +107,23 @@ public class CinephageController : ControllerBase
             return Unauthorized();
         }
 
+        var mediaType = string.Equals(body.MediaType, "series", StringComparison.OrdinalIgnoreCase) ? "series" : "movie";
+        var seasons = body.Seasons?.Where(s => s > 0).Distinct().OrderBy(s => s).ToList();
         if (body.TmdbId <= 0)
         {
-            return BadRequest(new RequestOutcome { Message = "Ongeldige film." });
+            return BadRequest(new RequestOutcome { Message = "Ongeldige titel." });
+        }
+
+        if (mediaType == "series" && (seasons is null || seasons.Count == 0))
+        {
+            return Ok(new RequestOutcome { Success = false, Code = "invalid_scope", Message = "Kies minstens één seizoen." });
         }
 
         var username = User.FindFirst(ClaimTypes.Name)?.Value ?? userId.ToString("N");
         RequestOutcome outcome;
         try
         {
-            outcome = await _client.RequestMovieAsync(body.TmdbId, cancellationToken).ConfigureAwait(false);
+            outcome = await _client.RequestAsync(mediaType, body.TmdbId, seasons, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is CinephageException or HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -102,7 +131,7 @@ public class CinephageController : ControllerBase
             return Ok(new RequestOutcome { Success = false, Code = "error", Message = "Aanvragen mislukt: Cinephage is niet bereikbaar of niet goed ingesteld." });
         }
 
-        _logger.LogInformation("Cinephage request for TMDB {TmdbId} by {User}: {Result}", body.TmdbId, username, outcome.Success ? "ok" : outcome.Code);
+        _logger.LogInformation("Cinephage request for {Type} TMDB {TmdbId} by {User}: {Result}", mediaType, body.TmdbId, username, outcome.Success ? "ok" : outcome.Code);
 
         // Also log "already requested", so you can see that more people wanted it.
         if (outcome.Success || outcome.Code == "duplicate_request")
@@ -112,9 +141,11 @@ public class CinephageController : ControllerBase
                 RequestedAt = DateTime.UtcNow,
                 UserId = userId,
                 Username = username,
+                MediaType = mediaType,
                 TmdbId = body.TmdbId,
                 Title = outcome.Title ?? body.Title ?? $"TMDB {body.TmdbId}",
                 Year = outcome.Year ?? body.Year,
+                Seasons = mediaType == "series" ? seasons : null,
                 CinephageRequestId = outcome.CinephageRequestId,
                 Status = outcome.Success ? outcome.RequestStatus : "duplicate"
             }).ConfigureAwait(false);

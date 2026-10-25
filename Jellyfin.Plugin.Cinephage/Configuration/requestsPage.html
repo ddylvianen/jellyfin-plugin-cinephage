@@ -13,7 +13,7 @@
                         <h2 class="sectionTitle" style="margin:0;">Cinephage-verzoeken</h2>
                         <button is="emby-button" type="button" id="CinephageRequestsRefresh" class="raised emby-button"><span>Vernieuwen</span></button>
                     </div>
-                    <p class="fieldDescription">Wie welke film heeft aangevraagd via Jellyfin. De status komt live uit Cinephage.</p>
+                    <p class="fieldDescription">Wie welke film of serie heeft aangevraagd via Jellyfin. De status komt live uit Cinephage.</p>
                     <div id="CinephageRequestsNotice" class="fieldDescription"></div>
                 </div>
                 <div style="overflow-x:auto;">
@@ -22,7 +22,7 @@
                             <tr style="text-align:left;">
                                 <th style="padding:.5em;">Datum</th>
                                 <th style="padding:.5em;">Gebruiker</th>
-                                <th style="padding:.5em;">Film</th>
+                                <th style="padding:.5em;">Titel</th>
                                 <th style="padding:.5em;">Status</th>
                             </tr>
                         </thead>
@@ -58,8 +58,11 @@
                         .then(function (data) {
                             var rows = (data.Requests || []).map(function (r) {
                                 var date = new Date(r.RequestedAt).toLocaleString();
-                                var film = '<a href="https://www.themoviedb.org/movie/' + r.TmdbId + '" target="_blank" rel="noopener">' +
-                                    esc(r.Title) + (r.Year ? ' (' + r.Year + ')' : '') + '</a>';
+                                var isSeries = r.MediaType === 'series';
+                                var film = '<a href="https://www.themoviedb.org/' + (isSeries ? 'tv/' : 'movie/') + r.TmdbId + '" target="_blank" rel="noopener" style="color:inherit;">' +
+                                    esc(r.Title) + (r.Year ? ' (' + r.Year + ')' : '') + '</a>' +
+                                    (isSeries ? '<div class="fieldDescription" style="margin:0;">Serie · ' +
+                                        esc((r.Seasons || []).map(function (s) { return 'S' + s; }).join(', ')) + '</div>' : '');
                                 return '<tr style="border-top:1px solid rgba(128,128,128,.25);">' +
                                     '<td style="padding:.5em;white-space:nowrap;">' + esc(date) + '</td>' +
                                     '<td style="padding:.5em;">' + esc(r.Username) + '</td>' +

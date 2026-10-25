@@ -1,10 +1,13 @@
 # Cinephage Requests (Jellyfin-plugin)
 
-Voegt op de Jellyfin-zoekpagina een rij **"Aanvragen via Cinephage"** toe. Gebruikers kunnen daar films aanvragen. Ze hebben **geen Cinephage-account** nodig.
+Voegt op de Jellyfin-zoekpagina, direct onder de zoekbalk, een sectie **"Aanvragen via Cinephage"** toe. Gebruikers kunnen daar films en series aanvragen. Ze hebben **geen Cinephage-account** nodig.
 
+- Elke kaart heeft een label **Film** of **Serie**.
+- Bij een serie opent **Seizoenen kiezen** een venster met alle seizoenen en hun status. Seizoenen die al beschikbaar zijn, al aangevraagd zijn of nog geen afleveringen hebben, zijn niet te kiezen. Specials (seizoen 0) staan er niet bij, omdat Cinephage die niet als verzoek accepteert.
 - Verzoeken gaan met de API-key van Cinephage naar Cinephage. Ze worden daar **direct goedgekeurd**, omdat de key bij het admin-account hoort.
-- In Cinephage staat bij elk verzoek de admin als aanvrager. Wie het echt was, houdt de plugin zelf bij. Je ziet dat in Jellyfin onder **Dashboard → Cinephage-verzoeken**: datum, Jellyfin-gebruiker, film en de actuele Cinephage-status.
-- Vraagt iemand een film aan die al aangevraagd is, dan komt dat ook in het overzicht ("Was al aangevraagd"). Zo zie je dat meer mensen hem wilden.
+- In Cinephage staat bij elk verzoek de admin als aanvrager. Wie het echt was, houdt de plugin zelf bij. Je ziet dat in Jellyfin onder **Dashboard → Cinephage-verzoeken**: datum, Jellyfin-gebruiker, titel (met seizoenen bij series) en de actuele Cinephage-status.
+- Vraagt iemand iets aan dat al aangevraagd is, dan komt dat ook in het overzicht ("Was al aangevraagd"). Zo zie je dat meer mensen het wilden.
+- Cinephage voegt de titel bij een verzoek meteen toe aan de bibliotheek, en dat kan lang duren. De plugin wacht daarom maximaal 2 minuten. Komt er dan nog geen antwoord, dan kijkt hij in Cinephage of het verzoek toch is aangekomen.
 
 ## Vereisten
 
@@ -46,13 +49,14 @@ Het overzicht van wie wat heeft aangevraagd staat in `<config>/plugins/Jellyfin.
 | Methode | Pad | Auth |
 |---|---|---|
 | GET | `/Cinephage/Search?query=` | ingelogde gebruiker |
-| POST | `/Cinephage/Request` `{ "TmdbId": 123 }` | ingelogde gebruiker |
+| GET | `/Cinephage/Series/{tmdbId}/Seasons` | ingelogde gebruiker |
+| POST | `/Cinephage/Request` `{ "MediaType": "movie"\|"series", "TmdbId": 123, "Seasons": [1, 2] }` | ingelogde gebruiker |
 | GET | `/Cinephage/Requests` | Jellyfin-admin |
 | POST | `/Cinephage/Test` | Jellyfin-admin |
 | GET | `/Cinephage/Script` | anoniem (het script) |
 
 ## Bekende beperkingen
 
-- Alleen films, geen series.
+- Series kun je per seizoen aanvragen, niet per losse aflevering.
 - Elke Jellyfin-gebruiker kan aanvragen, en de downloads starten direct. Een limiet per gebruiker is er niet.
 - De zoekpagina-integratie hangt af van de DOM van jellyfin-web 12 (`#searchPage`, `.searchResults`). Een update van jellyfin-web kan die breken.

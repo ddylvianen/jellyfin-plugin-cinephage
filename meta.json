@@ -1,7 +1,7 @@
 {
   "category": "General",
-  "changelog": "Eerste versie: aanvragen vanuit zoeken, verzoekenoverzicht per gebruiker.",
-  "description": "Films aanvragen in Cinephage vanuit de Jellyfin-zoekpagina. Gebruikers hebben geen Cinephage-account nodig; wie wat aanvroeg zie je in het dashboard.",
+  "changelog": "Series aanvragen met seizoenkeuze; langere time-out bij aanvragen.",
+  "description": "Films en series aanvragen in Cinephage vanuit de Jellyfin-zoekpagina. Gebruikers hebben geen Cinephage-account nodig; wie wat aanvroeg zie je in het dashboard.",
   "guid": "4f7c2a8e-6b1d-4e3a-9c5f-2d8b7a1e0c93",
   "name": "Cinephage Requests",
   "overview": "Request movies in Cinephage from Jellyfin",
