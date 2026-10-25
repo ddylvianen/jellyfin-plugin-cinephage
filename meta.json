@@ -1,6 +1,6 @@
 {
   "category": "General",
-  "changelog": "Knoppen in het seizoenvenster leesbaar met elk thema (o.a. Jellyfin Enhanced).",
+  "changelog": "Verzoekenlijst toont of iets nog in Cinephage staat; log is alleen nog audit; verwijderde titels kunnen opnieuw worden aangevraagd.",
   "description": "Films en series aanvragen in Cinephage vanuit de Jellyfin-zoekpagina. Gebruikers hebben geen Cinephage-account nodig; wie wat aanvroeg zie je in het dashboard.",
   "guid": "4f7c2a8e-6b1d-4e3a-9c5f-2d8b7a1e0c93",
   "name": "Cinephage Requests",

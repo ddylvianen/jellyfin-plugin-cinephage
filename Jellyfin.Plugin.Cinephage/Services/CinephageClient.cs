@@ -15,10 +15,12 @@ namespace Jellyfin.Plugin.Cinephage.Services;
 
 /// <summary>
 /// Talks to the Cinephage API with the configured API key.
+/// State (library, requests) always comes from Cinephage; the plugin's own log is only an audit trail.
 /// </summary>
 public sealed class CinephageClient : IDisposable
 {
     private const string PosterBaseUrl = "https://image.tmdb.org/t/p/w342";
+    private const int MaxParallelLookups = 8;
     private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
 
@@ -55,9 +57,29 @@ public sealed class CinephageClient : IDisposable
 
         var movieTask = SearchTypeAsync("movie", query, max, cancellationToken);
         var seriesTask = SearchTypeAsync("series", query, max, cancellationToken);
+        var requestsTask = TryGetRequestsAsync(cancellationToken);
         var all = (await movieTask.ConfigureAwait(false)).Concat(await seriesTask.ConfigureAwait(false)).ToList();
+        var requests = await requestsTask.ConfigureAwait(false);
 
-        await Task.WhenAll(all.Select(m => FillStatusAsync(m, cancellationToken))).ConfigureAwait(false);
+        var states = await GetMediaStatesAsync(all.Select(m => (m.MediaType, m.TmdbId)), cancellationToken).ConfigureAwait(false);
+        foreach (var item in all)
+        {
+            if (!states.TryGetValue((item.MediaType, item.TmdbId), out var state))
+            {
+                continue;
+            }
+
+            var blocking = requests.Any(r => r.MediaType == item.MediaType && r.TmdbId == item.TmdbId && r.IsBlocking);
+            item.Status = item.MediaType == "series"
+                ? blocking ? MediaStatus.Requested
+                    : state.AvailableEpisodes.Count > 0 ? MediaStatus.Partial
+                    : state.InLibrary ? MediaStatus.Wanted
+                    : MediaStatus.None
+                : state.HasFile ? MediaStatus.Available
+                    : blocking ? MediaStatus.Requested
+                    : state.InLibrary ? MediaStatus.Wanted
+                    : MediaStatus.None;
+        }
 
         // Series stay visible when (partly) available: more seasons may still be requested.
         var visible = all.Where(m => !(config.HideAvailable && m.MediaType == "movie" && m.Status == MediaStatus.Available));
@@ -74,53 +96,17 @@ public sealed class CinephageClient : IDisposable
     /// <returns>The seasons, specials excluded (Cinephage only accepts season 1 and up).</returns>
     public async Task<IReadOnlyList<SeasonInfo>> GetSeasonsAsync(int tmdbId, CancellationToken cancellationToken)
     {
-        var id = tmdbId.ToString(CultureInfo.InvariantCulture);
-        using var details = await GetJsonAsync("/api/tmdb/tv/" + id, cancellationToken).ConfigureAwait(false);
-        using var state = await GetJsonAsync("/api/requests/media-status?mediaType=series&tmdbId=" + id, cancellationToken).ConfigureAwait(false);
+        var detailsTask = GetJsonAsync("/api/tmdb/tv/" + tmdbId.ToString(CultureInfo.InvariantCulture), cancellationToken);
+        var stateTask = GetMediaStateAsync("series", tmdbId, cancellationToken);
+        var requestsTask = TryGetRequestsAsync(cancellationToken);
+        using var details = await detailsTask.ConfigureAwait(false);
+        var state = await stateTask.ConfigureAwait(false);
 
-        var available = new Dictionary<int, int>();
-        if (state.RootElement.TryGetProperty("availableEpisodes", out var availableEpisodes) && availableEpisodes.ValueKind == JsonValueKind.Array)
-        {
-            // Entries look like "1x5" (season x episode).
-            foreach (var entry in availableEpisodes.EnumerateArray())
-            {
-                var text = entry.GetString();
-                var x = text?.IndexOf('x', StringComparison.Ordinal) ?? -1;
-                if (x > 0 && int.TryParse(text.AsSpan(0, x), NumberStyles.Integer, CultureInfo.InvariantCulture, out var season))
-                {
-                    available[season] = available.GetValueOrDefault(season) + 1;
-                }
-            }
-        }
-
-        var requested = new HashSet<int>();
-        if (state.RootElement.TryGetProperty("activeScopes", out var scopes) && scopes.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var scope in scopes.EnumerateArray())
-            {
-                if (scope.TryGetProperty("seasons", out var seasons) && seasons.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var s in seasons.EnumerateArray())
-                    {
-                        if (s.TryGetInt32(out var n))
-                        {
-                            requested.Add(n);
-                        }
-                    }
-                }
-
-                if (scope.TryGetProperty("episodes", out var episodes) && episodes.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var e in episodes.EnumerateArray())
-                    {
-                        if (e.TryGetProperty("seasonNumber", out var sn) && sn.TryGetInt32(out var n))
-                        {
-                            requested.Add(n);
-                        }
-                    }
-                }
-            }
-        }
+        // Only requests that are still in progress lock a season; failed or orphaned ones may be re-requested.
+        var requested = (await requestsTask.ConfigureAwait(false))
+            .Where(r => r.MediaType == "series" && r.TmdbId == tmdbId && r.IsBlocking)
+            .SelectMany(r => r.Seasons)
+            .ToHashSet();
 
         var result = new List<SeasonInfo>();
         if (!details.RootElement.TryGetProperty("seasons", out var tmdbSeasons) || tmdbSeasons.ValueKind != JsonValueKind.Array)
@@ -136,7 +122,7 @@ public sealed class CinephageClient : IDisposable
             }
 
             var episodeCount = season.TryGetProperty("episode_count", out var ec) && ec.TryGetInt32(out var count) ? count : 0;
-            var availableCount = available.GetValueOrDefault(number);
+            var availableCount = state.AvailableEpisodes.GetValueOrDefault(number);
             var status = requested.Contains(number) ? MediaStatus.Requested
                 : episodeCount > 0 && availableCount >= episodeCount ? MediaStatus.Available
                 : availableCount > 0 ? MediaStatus.Partial
@@ -159,7 +145,9 @@ public sealed class CinephageClient : IDisposable
     }
 
     /// <summary>
-    /// Submits a request in Cinephage.
+    /// Submits a request in Cinephage. Stale requests for the same title (failed, or approved
+    /// while the library item was deleted) are removed first, because Cinephage would otherwise
+    /// reject the new request as a duplicate.
     /// </summary>
     /// <param name="mediaType">"movie" or "series".</param>
     /// <param name="tmdbId">The TMDB id.</param>
@@ -168,6 +156,8 @@ public sealed class CinephageClient : IDisposable
     /// <returns>The outcome.</returns>
     public async Task<RequestOutcome> RequestAsync(string mediaType, int tmdbId, IReadOnlyList<int>? seasons, CancellationToken cancellationToken)
     {
+        await RemoveStaleRequestsAsync(mediaType, tmdbId, seasons, cancellationToken).ConfigureAwait(false);
+
         var body = mediaType == "series"
             ? JsonSerializer.Serialize(new { mediaType, tmdbId, seasons })
             : JsonSerializer.Serialize(new { mediaType, tmdbId });
@@ -228,6 +218,7 @@ public sealed class CinephageClient : IDisposable
                     "already_available" => $"Deze {noun} is al beschikbaar.",
                     "already_in_library" => $"Deze {noun} staat al in Cinephage en wordt gezocht.",
                     "blocked_media" => $"Deze {noun} is geblokkeerd in Cinephage.",
+                    "cooldown" => $"Deze {noun} is kort geleden afgewezen en kan nog even niet opnieuw worden aangevraagd.",
                     "invalid_scope" => "Kies minstens één bestaand seizoen.",
                     _ => GetString(root, "error") ?? "Aanvragen mislukt."
                 }
@@ -240,28 +231,24 @@ public sealed class CinephageClient : IDisposable
     }
 
     /// <summary>
-    /// Gets the current status of all requests in Cinephage, keyed by request id.
+    /// Works out the current state in Cinephage of every logged request. The log entries themselves are not changed.
     /// </summary>
+    /// <param name="entries">The audit log entries.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>Status per Cinephage request id.</returns>
-    public async Task<Dictionary<string, string>> GetRequestStatusesAsync(CancellationToken cancellationToken)
+    /// <returns>The entries with their current state, in the same order.</returns>
+    public async Task<IReadOnlyList<RequestLogView>> GetCurrentStatesAsync(IReadOnlyList<RequestLogEntry> entries, CancellationToken cancellationToken)
     {
-        using var doc = await GetJsonAsync("/api/requests?take=1000", cancellationToken).ConfigureAwait(false);
-        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (doc.RootElement.TryGetProperty("requests", out var requests) && requests.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var request in requests.EnumerateArray())
-            {
-                var id = GetString(request, "id");
-                var status = GetString(request, "status");
-                if (id is not null && status is not null)
-                {
-                    statuses[id] = status;
-                }
-            }
-        }
+        var requests = (await GetRequestsAsync(cancellationToken).ConfigureAwait(false))
+            .GroupBy(r => r.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var states = await GetMediaStatesAsync(entries.Select(e => (e.MediaType, e.TmdbId)), cancellationToken).ConfigureAwait(false);
 
-        return statuses;
+        return entries.Select(entry =>
+        {
+            var state = states.GetValueOrDefault((entry.MediaType, entry.TmdbId));
+            var request = entry.CinephageRequestId is null ? null : requests.GetValueOrDefault(entry.CinephageRequestId);
+            return new RequestLogView { Entry = entry, CurrentStatus = CurrentStatus(entry, request, state) };
+        }).ToList();
     }
 
     /// <summary>
@@ -285,6 +272,190 @@ public sealed class CinephageClient : IDisposable
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static string Truncate(string text) => text.Length <= 300 ? text : text[..300] + "…";
+
+    private static string CurrentStatus(RequestLogEntry entry, CinephageRequest? request, MediaState? state)
+    {
+        if (state is null)
+        {
+            return "unknown";
+        }
+
+        // For series the episode totals are not known here, so "available" only comes from
+        // Cinephage marking the request fulfilled, or (without a request) from files in every requested season.
+        var available = entry.MediaType == "series"
+            ? request is null && entry.Seasons is { Count: > 0 } && entry.Seasons.All(state.AvailableEpisodes.ContainsKey)
+            : state.HasFile;
+
+        if (request is not null)
+        {
+            switch (request.Status)
+            {
+                case "pending":
+                case "awaiting_target":
+                    return request.Status;
+                case "approved":
+                    return !request.HasLibraryItem || !state.InLibrary ? "removed" : available ? "available" : "searching";
+                case "fulfilled":
+                    return state.InLibrary ? "available" : "removed";
+                case "failed":
+                    return !state.InLibrary || request.FailureReason == "Library item was deleted" ? "removed" : "failed";
+                case "declined":
+                    return state.InLibrary ? available ? "available" : "in_library" : "declined";
+                default:
+                    // expired, cancelled (e.g. replaced by a re-request): what matters is whether the
+                    // title is in the library now.
+                    return state.InLibrary ? available ? "available" : "in_library" : "removed";
+            }
+        }
+
+        // No (longer a) Cinephage request: "already requested" entries, or the request was removed in Cinephage.
+        return !state.InLibrary ? "removed" : available ? "available" : "in_library";
+    }
+
+    private async Task RemoveStaleRequestsAsync(string mediaType, int tmdbId, IReadOnlyList<int>? seasons, CancellationToken cancellationToken)
+    {
+        var stale = (await TryGetRequestsAsync(cancellationToken).ConfigureAwait(false))
+            .Where(r => r.MediaType == mediaType && r.TmdbId == tmdbId && !r.IsBlocking && r.Status is "failed" or "approved")
+            // For series only clear what overlaps the new selection; other seasons keep their history.
+            .Where(r => mediaType != "series" || seasons is null || r.Seasons.Count == 0 || r.Seasons.Overlaps(seasons))
+            .ToList();
+
+        foreach (var request in stale)
+        {
+            // Cinephage removes a failed request and cancels an approved one.
+            using var response = await SendAsync(HttpMethod.Delete, "/api/requests/" + Uri.EscapeDataString(request.Id), null, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Removed stale Cinephage {Type} request {Id} ({Status}) for TMDB {TmdbId} before re-requesting: HTTP {Code}",
+                mediaType,
+                request.Id,
+                request.Status,
+                tmdbId,
+                (int)response.StatusCode);
+        }
+    }
+
+    private async Task<List<CinephageRequest>> TryGetRequestsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GetRequestsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is CinephageException or HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogDebug(ex, "Could not list Cinephage requests");
+            return [];
+        }
+    }
+
+    private async Task<List<CinephageRequest>> GetRequestsAsync(CancellationToken cancellationToken)
+    {
+        using var doc = await GetJsonAsync("/api/requests?take=1000", cancellationToken).ConfigureAwait(false);
+        var result = new List<CinephageRequest>();
+        if (!doc.RootElement.TryGetProperty("requests", out var requests) || requests.ValueKind != JsonValueKind.Array)
+        {
+            return result;
+        }
+
+        foreach (var request in requests.EnumerateArray())
+        {
+            var id = GetString(request, "id");
+            if (id is null || !request.TryGetProperty("tmdbId", out var t) || !t.TryGetInt32(out var tmdbId))
+            {
+                continue;
+            }
+
+            var item = new CinephageRequest
+            {
+                Id = id,
+                MediaType = GetString(request, "mediaType") ?? "movie",
+                TmdbId = tmdbId,
+                Status = GetString(request, "status") ?? string.Empty,
+                HasLibraryItem = GetString(request, "movieId") is not null || GetString(request, "seriesId") is not null,
+                FailureReason = GetString(request, "failureReason")
+            };
+
+            if (request.TryGetProperty("seasons", out var seasons) && seasons.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var s in seasons.EnumerateArray())
+                {
+                    if (s.TryGetInt32(out var n))
+                    {
+                        item.Seasons.Add(n);
+                    }
+                }
+            }
+
+            if (request.TryGetProperty("episodes", out var episodes) && episodes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in episodes.EnumerateArray())
+                {
+                    if (e.TryGetProperty("seasonNumber", out var sn) && sn.TryGetInt32(out var n))
+                    {
+                        item.Seasons.Add(n);
+                    }
+                }
+            }
+
+            result.Add(item);
+        }
+
+        return result;
+    }
+
+    private async Task<Dictionary<(string, int), MediaState>> GetMediaStatesAsync(IEnumerable<(string MediaType, int TmdbId)> keys, CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<(string, int), MediaState>();
+        using var throttle = new SemaphoreSlim(MaxParallelLookups);
+        await Task.WhenAll(keys.Distinct().Select(async key =>
+        {
+            await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var state = await GetMediaStateAsync(key.MediaType, key.TmdbId, cancellationToken).ConfigureAwait(false);
+                lock (result)
+                {
+                    result[key] = state;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(ex, "Could not get Cinephage state for {Type} {TmdbId}", key.MediaType, key.TmdbId);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        })).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<MediaState> GetMediaStateAsync(string mediaType, int tmdbId, CancellationToken cancellationToken)
+    {
+        var path = $"/api/requests/media-status?mediaType={mediaType}&tmdbId=" + tmdbId.ToString(CultureInfo.InvariantCulture);
+        using var doc = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
+        var root = doc.RootElement;
+        var state = new MediaState
+        {
+            InLibrary = root.TryGetProperty("inLibrary", out var inLibrary) && inLibrary.ValueKind == JsonValueKind.True,
+            HasFile = root.TryGetProperty("hasFile", out var hasFile) && hasFile.ValueKind == JsonValueKind.True
+        };
+
+        if (root.TryGetProperty("availableEpisodes", out var availableEpisodes) && availableEpisodes.ValueKind == JsonValueKind.Array)
+        {
+            // Entries look like "1x5" (season x episode).
+            foreach (var entry in availableEpisodes.EnumerateArray())
+            {
+                var text = entry.GetString();
+                var x = text?.IndexOf('x', StringComparison.Ordinal) ?? -1;
+                if (x > 0 && int.TryParse(text.AsSpan(0, x), NumberStyles.Integer, CultureInfo.InvariantCulture, out var season))
+                {
+                    state.AvailableEpisodes[season] = state.AvailableEpisodes.GetValueOrDefault(season) + 1;
+                }
+            }
+        }
+
+        return state;
+    }
 
     private async Task<List<MediaResult>> SearchTypeAsync(string mediaType, string query, int max, CancellationToken cancellationToken)
     {
@@ -330,49 +501,6 @@ public sealed class CinephageClient : IDisposable
         return items;
     }
 
-    private async Task FillStatusAsync(MediaResult item, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var path = $"/api/requests/media-status?mediaType={item.MediaType}&tmdbId=" + item.TmdbId.ToString(CultureInfo.InvariantCulture);
-            using var doc = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
-            var root = doc.RootElement;
-            bool Flag(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
-            int Count(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array ? v.GetArrayLength() : 0;
-
-            if (item.MediaType == "series")
-            {
-                // Whether all seasons are complete is only known per season (see GetSeasonsAsync).
-                item.Status = Count("activeScopes") > 0 ? MediaStatus.Requested
-                    : Count("availableEpisodes") > 0 ? MediaStatus.Partial
-                    : Flag("inLibrary") ? MediaStatus.Wanted
-                    : MediaStatus.None;
-                return;
-            }
-
-            item.Status = Flag("hasFile") ? MediaStatus.Available
-                : Flag("active") ? MediaStatus.Requested
-                : Flag("inLibrary") ? MediaStatus.Wanted
-                : MediaStatus.None;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogDebug(ex, "Could not get Cinephage status for {Type} {TmdbId}", item.MediaType, item.TmdbId);
-        }
-    }
-
-    private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken cancellationToken)
-    {
-        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
-        var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new CinephageException($"Cinephage GET {path} returned HTTP {(int)response.StatusCode}: {Truncate(text)}");
-        }
-
-        return JsonDocument.Parse(text);
-    }
-
     private async Task<(string Id, string? Status)?> FindRecentRequestAsync(string mediaType, int tmdbId, CancellationToken cancellationToken)
     {
         // Newest first; a request created in the last minutes is near the top.
@@ -396,6 +524,18 @@ public sealed class CinephageClient : IDisposable
         }
 
         return null;
+    }
+
+    private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
+        var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new CinephageException($"Cinephage GET {path} returned HTTP {(int)response.StatusCode}: {Truncate(text)}");
+        }
+
+        return JsonDocument.Parse(text);
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, string? body, CancellationToken cancellationToken, TimeSpan? timeout = null)

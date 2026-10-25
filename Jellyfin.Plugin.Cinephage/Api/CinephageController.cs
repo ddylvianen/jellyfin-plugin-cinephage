@@ -155,7 +155,7 @@ public class CinephageController : ControllerBase
     }
 
     /// <summary>
-    /// Lists who requested what, with the current Cinephage status (admins only).
+    /// Lists who requested what (the audit log, unchanged) with each title's current state in Cinephage (admins only).
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The log entries, newest first.</returns>
@@ -165,25 +165,16 @@ public class CinephageController : ControllerBase
     public async Task<IActionResult> Requests(CancellationToken cancellationToken)
     {
         var entries = await _requestLog.GetAllAsync().ConfigureAwait(false);
-        var statusAvailable = true;
         try
         {
-            var statuses = await _client.GetRequestStatusesAsync(cancellationToken).ConfigureAwait(false);
-            foreach (var entry in entries)
-            {
-                if (entry.CinephageRequestId is not null && statuses.TryGetValue(entry.CinephageRequestId, out var status))
-                {
-                    entry.Status = status;
-                }
-            }
+            var views = await _client.GetCurrentStatesAsync(entries, cancellationToken).ConfigureAwait(false);
+            return Ok(new { StatusAvailable = true, Requests = views });
         }
-        catch (Exception ex) when (ex is CinephageException or HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is CinephageException or HttpRequestException or System.Text.Json.JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning(ex, "Could not refresh request statuses from Cinephage");
-            statusAvailable = false;
+            _logger.LogWarning(ex, "Could not get current request states from Cinephage");
+            return Ok(new { StatusAvailable = false, Requests = entries.Select(e => new RequestLogView { Entry = e }) });
         }
-
-        return Ok(new { StatusAvailable = statusAvailable, Requests = entries });
     }
 
     /// <summary>

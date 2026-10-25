@@ -129,7 +129,71 @@ public class MediaRequestBody
 }
 
 /// <summary>
-/// One request made from Jellyfin.
+/// A request as Cinephage currently has it.
+/// </summary>
+public class CinephageRequest
+{
+    /// <summary>Gets or sets the Cinephage request id.</summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the media type: "movie" or "series".</summary>
+    public string MediaType { get; set; } = "movie";
+
+    /// <summary>Gets or sets the TMDB id.</summary>
+    public int TmdbId { get; set; }
+
+    /// <summary>Gets or sets the status (pending, approved, awaiting_target, failed, fulfilled, ...).</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the request still points at a library item.</summary>
+    public bool HasLibraryItem { get; set; }
+
+    /// <summary>Gets or sets the seasons the request covers (whole seasons or via episodes).</summary>
+    public HashSet<int> Seasons { get; set; } = [];
+
+    /// <summary>Gets or sets the failure reason, if any.</summary>
+    public string? FailureReason { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this request still blocks a new one for the same scope.
+    /// An approved request whose library item was deleted is an orphan (Cinephage fails it
+    /// on its hourly sweep); failed requests are cleaned up by the plugin before re-requesting.
+    /// </summary>
+    public bool IsBlocking => Status is "pending" or "awaiting_target" || (Status == "approved" && HasLibraryItem);
+}
+
+/// <summary>
+/// Library state of a title in Cinephage.
+/// </summary>
+public class MediaState
+{
+    /// <summary>Gets or sets a value indicating whether the title is in the Cinephage library.</summary>
+    public bool InLibrary { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the movie has a file.</summary>
+    public bool HasFile { get; set; }
+
+    /// <summary>Gets or sets the episode files per season (series only).</summary>
+    public Dictionary<int, int> AvailableEpisodes { get; set; } = [];
+}
+
+/// <summary>
+/// A log entry plus its current state in Cinephage, as shown on the dashboard.
+/// </summary>
+public class RequestLogView
+{
+    /// <summary>Gets or sets the logged request (unchanged audit data).</summary>
+    public RequestLogEntry Entry { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the current state: pending, searching, awaiting_target, available, in_library,
+    /// failed, declined, expired, cancelled, removed or unknown (Cinephage unreachable).
+    /// </summary>
+    public string CurrentStatus { get; set; } = "unknown";
+}
+
+/// <summary>
+/// One request made from Jellyfin. Entries are an append-only audit log and never change.
 /// </summary>
 public class RequestLogEntry
 {
@@ -160,6 +224,6 @@ public class RequestLogEntry
     /// <summary>Gets or sets the Cinephage request id; null when it was already requested.</summary>
     public string? CinephageRequestId { get; set; }
 
-    /// <summary>Gets or sets the Cinephage status (refreshed when the log is viewed).</summary>
+    /// <summary>Gets or sets the Cinephage status at the time of the request ("duplicate" when it was already requested).</summary>
     public string? Status { get; set; }
 }

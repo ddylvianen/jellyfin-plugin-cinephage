@@ -5,8 +5,9 @@ Voegt op de Jellyfin-zoekpagina, direct onder de zoekbalk, een sectie **"Aanvrag
 - Elke kaart heeft een label **Film** of **Serie**.
 - Bij een serie opent **Seizoenen kiezen** een venster met alle seizoenen en hun status. Seizoenen die al beschikbaar zijn, al aangevraagd zijn of nog geen afleveringen hebben, zijn niet te kiezen. Specials (seizoen 0) staan er niet bij, omdat Cinephage die niet als verzoek accepteert.
 - Verzoeken gaan met de API-key van Cinephage naar Cinephage. Ze worden daar **direct goedgekeurd**, omdat de key bij het admin-account hoort.
-- In Cinephage staat bij elk verzoek de admin als aanvrager. Wie het echt was, houdt de plugin zelf bij. Je ziet dat in Jellyfin onder **Dashboard → Cinephage-verzoeken**: datum, Jellyfin-gebruiker, titel (met seizoenen bij series) en de actuele Cinephage-status.
+- In Cinephage staat bij elk verzoek de admin als aanvrager. Wie het echt was, houdt de plugin zelf bij in een **vast logboek (audit)**. Er komen alleen regels bij; bestaande regels veranderen nooit. Je ziet het in Jellyfin onder **Dashboard → Cinephage-verzoeken**: datum, Jellyfin-gebruiker, titel (met seizoenen bij series), de status bij het aanvragen en **Nu in Cinephage**. Die laatste kolom vraagt de plugin bij elke keer laden opnieuw op bij Cinephage, bijvoorbeeld *Wordt gezocht*, *Beschikbaar* of *Niet meer in Cinephage*.
 - Vraagt iemand iets aan dat al aangevraagd is, dan komt dat ook in het overzicht ("Was al aangevraagd"). Zo zie je dat meer mensen het wilden.
+- Of iets al in Cinephage staat of al is aangevraagd, bepaalt de plugin bij het zoeken altijd via Cinephage, nooit via het logboek. Is een titel uit Cinephage verwijderd, dan kun je hem gewoon opnieuw aanvragen. Cinephage zou dat normaal blokkeren, omdat het oude verzoek op *failed* staat, of op *approved* terwijl de titel al weg is. De plugin ruimt zo'n oud verzoek daarom eerst op.
 - Cinephage voegt de titel bij een verzoek meteen toe aan de bibliotheek, en dat kan lang duren. De plugin wacht daarom maximaal 2 minuten. Komt er dan nog geen antwoord, dan kijkt hij in Cinephage of het verzoek toch is aangekomen.
 
 ## Vereisten

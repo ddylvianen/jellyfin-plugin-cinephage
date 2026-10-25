@@ -13,7 +13,7 @@
                         <h2 class="sectionTitle" style="margin:0;">Cinephage-verzoeken</h2>
                         <button is="emby-button" type="button" id="CinephageRequestsRefresh" class="raised emby-button"><span>Vernieuwen</span></button>
                     </div>
-                    <p class="fieldDescription">Wie welke film of serie heeft aangevraagd via Jellyfin. De status komt live uit Cinephage.</p>
+                    <p class="fieldDescription">Wie welke film of serie heeft aangevraagd via Jellyfin. Deze lijst is een vast logboek; de kolom <i>Nu in Cinephage</i> wordt bij elke keer laden opnieuw bij Cinephage opgevraagd.</p>
                     <div id="CinephageRequestsNotice" class="fieldDescription"></div>
                 </div>
                 <div style="overflow-x:auto;">
@@ -23,7 +23,8 @@
                                 <th style="padding:.5em;">Datum</th>
                                 <th style="padding:.5em;">Gebruiker</th>
                                 <th style="padding:.5em;">Titel</th>
-                                <th style="padding:.5em;">Status</th>
+                                <th style="padding:.5em;">Bij aanvraag</th>
+                                <th style="padding:.5em;">Nu in Cinephage</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -34,16 +35,26 @@
         <script type="text/javascript">
             (function () {
                 var page = document.querySelector('#CinephageRequestsPage');
-                var STATUS = {
+                // Status recorded in the audit log at request time.
+                var LOGGED = {
                     pending: 'Wacht op goedkeuring',
-                    approved: 'Goedgekeurd, wordt gezocht',
+                    approved: 'Goedgekeurd',
                     awaiting_target: 'Wacht op release',
-                    failed: 'Mislukt',
-                    declined: 'Afgewezen',
-                    expired: 'Verlopen',
-                    cancelled: 'Geannuleerd',
-                    fulfilled: 'Beschikbaar',
                     duplicate: 'Was al aangevraagd'
+                };
+                // Current state, worked out from Cinephage on every load.
+                var CURRENT = {
+                    pending: ['Wacht op goedkeuring', ''],
+                    searching: ['Wordt gezocht', '#00a4dc'],
+                    awaiting_target: ['Wacht op release', ''],
+                    available: ['Beschikbaar', '#2ea043'],
+                    in_library: ['In Cinephage', ''],
+                    failed: ['Mislukt', '#d29922'],
+                    declined: ['Afgewezen', '#d29922'],
+                    expired: ['Verlopen', ''],
+                    cancelled: ['Geannuleerd', ''],
+                    removed: ['Niet meer in Cinephage', '#e5534b'],
+                    unknown: ['Onbekend', '']
                 };
 
                 function esc(v) {
@@ -56,7 +67,9 @@
                     Dashboard.showLoadingMsg();
                     ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('Cinephage/Requests'), dataType: 'json' })
                         .then(function (data) {
-                            var rows = (data.Requests || []).map(function (r) {
+                            var rows = (data.Requests || []).map(function (view) {
+                                var r = view.Entry;
+                                var current = CURRENT[view.CurrentStatus] || [view.CurrentStatus, ''];
                                 var date = new Date(r.RequestedAt).toLocaleString();
                                 var isSeries = r.MediaType === 'series';
                                 var film = '<a href="https://www.themoviedb.org/' + (isSeries ? 'tv/' : 'movie/') + r.TmdbId + '" target="_blank" rel="noopener" style="color:inherit;">' +
@@ -67,13 +80,14 @@
                                     '<td style="padding:.5em;white-space:nowrap;">' + esc(date) + '</td>' +
                                     '<td style="padding:.5em;">' + esc(r.Username) + '</td>' +
                                     '<td style="padding:.5em;">' + film + '</td>' +
-                                    '<td style="padding:.5em;">' + esc(STATUS[r.Status] || r.Status || '—') + '</td>' +
+                                    '<td style="padding:.5em;opacity:.75;">' + esc(LOGGED[r.Status] || r.Status || '—') + '</td>' +
+                                    '<td style="padding:.5em;' + (current[1] ? 'color:' + current[1] + ';font-weight:600;' : '') + '">' + esc(current[0]) + '</td>' +
                                     '</tr>';
                             });
                             page.querySelector('tbody').innerHTML = rows.length ? rows.join('') :
-                                '<tr><td colspan="4" style="padding:.5em;">Nog geen verzoeken.</td></tr>';
+                                '<tr><td colspan="5" style="padding:.5em;">Nog geen verzoeken.</td></tr>';
                             page.querySelector('#CinephageRequestsNotice').textContent = data.StatusAvailable ? '' :
-                                '⚠️ Cinephage niet bereikbaar; de status kan verouderd zijn.';
+                                '⚠️ Cinephage niet bereikbaar; de huidige stand is onbekend.';
                             Dashboard.hideLoadingMsg();
                         }, function () {
                             page.querySelector('#CinephageRequestsNotice').textContent = '❌ Verzoeken laden mislukt.';
