@@ -1,6 +1,6 @@
 {
   "category": "General",
-  "changelog": "Series aanvragen met seizoenkeuze; langere time-out bij aanvragen.",
+  "changelog": "Knoppen in het seizoenvenster leesbaar met elk thema (o.a. Jellyfin Enhanced).",
   "description": "Films en series aanvragen in Cinephage vanuit de Jellyfin-zoekpagina. Gebruikers hebben geen Cinephage-account nodig; wie wat aanvroeg zie je in het dashboard.",
   "guid": "4f7c2a8e-6b1d-4e3a-9c5f-2d8b7a1e0c93",
   "name": "Cinephage Requests",

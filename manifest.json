@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "1.1.1.0",
+        "changelog": "Knoppen in het seizoenvenster leesbaar met elk thema (o.a. Jellyfin Enhanced).",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/ddylvianen/jellyfin-plugin-cinephage/releases/download/v1.1.1.0/cinephage-requests_1.1.1.0.zip",
+        "checksum": "392a830d8cdacd4dfd9e714d485c5a9c",
+        "timestamp": "2026-10-25T23:30:00Z"
+      },
+      {
         "version": "1.1.0.0",
         "changelog": "Series aanvragen met seizoenkeuze, Film/Serie-label, aanvragen bovenaan de zoekpagina, langere time-out bij aanvragen.",
         "targetAbi": "12.0.0.0",

@@ -79,8 +79,15 @@
             m + ' .cp-season input { width: 1.2em; height: 1.2em; flex: none; }',
             m + ' .cp-season .cp-meta { margin-left: auto; font-size: .85em; opacity: .7; text-align: right; }',
             m + ' .cp-actions { display: flex; gap: .6em; justify-content: flex-end; align-items: center; padding: 1em 1.2em; flex-wrap: wrap; }',
-            m + ' .cp-actions .cp-all { margin-right: auto; }',
-            m + ' .cp-actions button { margin: 0; }',
+            m + ' .cp-actions .cp-all { margin-right: auto !important; }',
+            // Own button styling: theme button classes (and skins like Jellyfin Enhanced) made these unreadable.
+            m + ' .cp-mbtn { all: unset; box-sizing: border-box; cursor: pointer; margin: 0 !important; padding: .6em 1.1em !important; border-radius: .3em !important;' +
+                ' font: inherit !important; font-weight: 600 !important; color: #fff !important; background: rgba(255,255,255,.12) !important; border: 1px solid rgba(255,255,255,.25) !important; }',
+            m + ' .cp-mbtn:hover:not(:disabled) { background: rgba(255,255,255,.22) !important; }',
+            m + ' .cp-mbtn.cp-primary { background: #00a4dc !important; border-color: #00a4dc !important; }',
+            m + ' .cp-mbtn.cp-primary:hover:not(:disabled) { background: #0bb6f0 !important; }',
+            m + ' .cp-mbtn:disabled { opacity: .45; cursor: default; }',
+            m + ' .cp-mbtn:focus-visible { outline: 2px solid #00a4dc !important; outline-offset: 2px; }',
             '.cp-toast { position: fixed; left: 50%; bottom: 2em; transform: translateX(-50%); z-index: 99999; background: #222; color: #fff; padding: .8em 1.2em; border-radius: .4em; box-shadow: 0 4px 16px rgba(0,0,0,.4); max-width: 90vw; }'
         ].join('\n');
         document.head.appendChild(style);
@@ -304,9 +311,9 @@
             '<h3>' + escapeHtml(item.Title) + (item.Year ? ' (' + item.Year + ')' : '') + '</h3>' +
             '<div class="cp-seasons"><div class="cp-msg">Seizoenen laden…</div></div>' +
             '<div class="cp-actions">' +
-            '<button is="emby-button" type="button" class="emby-button cp-all" disabled>Alles selecteren</button>' +
-            '<button is="emby-button" type="button" class="emby-button cp-cancel">Annuleren</button>' +
-            '<button is="emby-button" type="button" class="raised button-submit emby-button cp-submit" disabled>Aanvragen</button>' +
+            '<button type="button" class="cp-mbtn cp-all" disabled>Alles selecteren</button>' +
+            '<button type="button" class="cp-mbtn cp-cancel">Annuleren</button>' +
+            '<button type="button" class="cp-mbtn cp-primary cp-submit" disabled>Aanvragen</button>' +
             '</div></div>';
         document.body.appendChild(modal);
 
