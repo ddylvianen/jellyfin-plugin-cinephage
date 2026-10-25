@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="utf-8">
+    <title>Cinephage-verzoeken</title>
+</head>
+<body>
+    <div id="CinephageRequestsPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
+        <div data-role="content">
+            <div class="content-primary">
+                <div class="verticalSection">
+                    <div style="display:flex;align-items:center;gap:1em;flex-wrap:wrap;">
+                        <h2 class="sectionTitle" style="margin:0;">Cinephage-verzoeken</h2>
+                        <button is="emby-button" type="button" id="CinephageRequestsRefresh" class="raised emby-button"><span>Vernieuwen</span></button>
+                    </div>
+                    <p class="fieldDescription">Wie welke film heeft aangevraagd via Jellyfin. De status komt live uit Cinephage.</p>
+                    <div id="CinephageRequestsNotice" class="fieldDescription"></div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table id="CinephageRequestsTable" style="width:100%;border-collapse:collapse;">
+                        <thead>
+                            <tr style="text-align:left;">
+                                <th style="padding:.5em;">Datum</th>
+                                <th style="padding:.5em;">Gebruiker</th>
+                                <th style="padding:.5em;">Film</th>
+                                <th style="padding:.5em;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var page = document.querySelector('#CinephageRequestsPage');
+                var STATUS = {
+                    pending: 'Wacht op goedkeuring',
+                    approved: 'Goedgekeurd, wordt gezocht',
+                    awaiting_target: 'Wacht op release',
+                    failed: 'Mislukt',
+                    declined: 'Afgewezen',
+                    expired: 'Verlopen',
+                    cancelled: 'Geannuleerd',
+                    fulfilled: 'Beschikbaar',
+                    duplicate: 'Was al aangevraagd'
+                };
+
+                function esc(v) {
+                    var d = document.createElement('div');
+                    d.textContent = v == null ? '' : String(v);
+                    return d.innerHTML;
+                }
+
+                function load() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('Cinephage/Requests'), dataType: 'json' })
+                        .then(function (data) {
+                            var rows = (data.Requests || []).map(function (r) {
+                                var date = new Date(r.RequestedAt).toLocaleString();
+                                var film = '<a href="https://www.themoviedb.org/movie/' + r.TmdbId + '" target="_blank" rel="noopener">' +
+                                    esc(r.Title) + (r.Year ? ' (' + r.Year + ')' : '') + '</a>';
+                                return '<tr style="border-top:1px solid rgba(128,128,128,.25);">' +
+                                    '<td style="padding:.5em;white-space:nowrap;">' + esc(date) + '</td>' +
+                                    '<td style="padding:.5em;">' + esc(r.Username) + '</td>' +
+                                    '<td style="padding:.5em;">' + film + '</td>' +
+                                    '<td style="padding:.5em;">' + esc(STATUS[r.Status] || r.Status || '—') + '</td>' +
+                                    '</tr>';
+                            });
+                            page.querySelector('tbody').innerHTML = rows.length ? rows.join('') :
+                                '<tr><td colspan="4" style="padding:.5em;">Nog geen verzoeken.</td></tr>';
+                            page.querySelector('#CinephageRequestsNotice').textContent = data.StatusAvailable ? '' :
+                                '⚠️ Cinephage niet bereikbaar; de status kan verouderd zijn.';
+                            Dashboard.hideLoadingMsg();
+                        }, function () {
+                            page.querySelector('#CinephageRequestsNotice').textContent = '❌ Verzoeken laden mislukt.';
+                            Dashboard.hideLoadingMsg();
+                        });
+                }
+
+                page.addEventListener('pageshow', load);
+                page.querySelector('#CinephageRequestsRefresh').addEventListener('click', load);
+            })();
+        </script>
+    </div>
+</body>
+</html>
